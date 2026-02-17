@@ -1,0 +1,13 @@
+line_bot_node:
+  ros__parameters:
+    # Cấu hình ngưỡng (Threshold) để phân biệt Line (1) và Đất (0)
+    # Sensor cao 0.03m. Line cao 0.005m -> Khoảng cách tới Line = 0.025m.
+    # Ngưỡng chọn là 0.028m (nhỏ hơn 0.03 và lớn hơn 0.025)
+    line_threshold: 0.028
+    
+    # Khoảng cách dừng an toàn với vật cản trước mặt
+    safe_distance_m: 0.5
+    
+    # Tốc độ (Giảm nhẹ để robot không bị văng khi cua gắt bằng logic 0/1)
+    base_speed: 0.15
+    turn_speed: 0.25
