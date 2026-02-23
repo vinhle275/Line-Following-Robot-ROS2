@@ -1,102 +1,129 @@
-#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String
-from sensor_msgs.msg import LaserScan
-from rclpy.qos import QoSProfile, ReliabilityPolicy # Import thêm QoS
+from std_msgs.msg import String, Float32, Int8
 
 class RobotBrain(Node):
     def __init__(self):
         super().__init__('robot_brain')
         
         # --- Parameters ---
-        self.declare_parameter('line_threshold', 0.028)
-        self.declare_parameter('base_speed', 0.15)
-        self.declare_parameter('turn_speed', 0.25)
+        self.declare_parameter('base_speed', 0.7)        
+        self.declare_parameter('turn_speed', 1.2)        
         self.declare_parameter('safe_distance_m', 0.5)
 
-        self.threshold = self.get_parameter('line_threshold').value
+        # Hệ số alpha cho bộ lọc làm mượt EMA (0 < alpha <= 1).
+        self.declare_parameter('alpha_v', 0.15)
+        self.declare_parameter('alpha_w', 0.25)
+
         self.base_speed = self.get_parameter('base_speed').value
         self.turn_speed = self.get_parameter('turn_speed').value
         self.safe_dist = self.get_parameter('safe_distance_m').value
 
-        # --- CẤU HÌNH QOS ---
-        # Cho phép nhận dữ liệu Best Effort (thường dùng cho sensor)
-        qos_profile = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.BEST_EFFORT
-        )
+        self.alpha_v = self.get_parameter('alpha_v').value
+        self.alpha_w = self.get_parameter('alpha_w').value
 
-        # --- Subscribers với QoS Profile ---
-        self.create_subscription(LaserScan, '/sensors/line_left_raw', self.left_cb, qos_profile)
-        self.create_subscription(LaserScan, '/sensors/line_right_raw', self.right_cb, qos_profile)
-        self.create_subscription(LaserScan, '/sensors/sonar_front_raw', self.sonar_cb, qos_profile)
+        # Hệ số bộ điều khiển PD
+        self.Kp = self.turn_speed
+        self.Kd = self.turn_speed * 0.35
+
+        self.current_v = 0.0
+        self.current_w = 0.0
+
+        # Subscribe topic
+        self.create_subscription(Int8, '/sensors/line_left', self.left_cb, 10)
+        self.create_subscription(Int8, '/sensors/line_right', self.right_cb, 10)
+        self.create_subscription(Float32, '/sensors/sonar/filtered', self.sonar_cb, 10)
         
+        # Khởi tạo Publisher
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.pub_debug = self.create_publisher(String, '/robot/debug_state', 10)
 
-        # State Variables
         self.sensor_left = 0
         self.sensor_right = 0
-        self.raw_left = 9.9
-        self.raw_right = 9.9
         self.sonar_dist = 9.9
         
-        self.create_timer(0.05, self.control_loop)
-
-    def process_sensor(self, msg):
-        if not msg.ranges: return 9.9, 0
-        raw_dist = msg.ranges[0]
-        # Logic: < Threshold là Line (1), ngược lại là Đất (0)
-        state = 1 if raw_dist < self.threshold else 0
-        return raw_dist, state
-
-    def left_cb(self, msg): 
-        self.raw_left, self.sensor_left = self.process_sensor(msg)
+        # Các biến phục vụ thuật toán điều khiển
+        self.last_error = 0.0       
+        self.last_turn_dir = 0.0    
         
-    def right_cb(self, msg): 
-        self.raw_right, self.sensor_right = self.process_sensor(msg)
-    
-    def sonar_cb(self, msg): 
-        if msg.ranges:
-             valid = [r for r in msg.ranges if r > 0.02]
-             if valid: self.sonar_dist = min(valid)
+        self.create_timer(0.05, self.control_loop)
+        self.get_logger().info('Robot Brain Node has been started.')
+
+    # Hàm cập nhật trạng thái
+
+    def left_cb(self, msg): self.sensor_left = msg.data
+    def right_cb(self, msg): self.sensor_right = msg.data
+    def sonar_cb(self, msg): self.sonar_dist = msg.data
 
     def control_loop(self):
         msg = Twist()
         debug_msg = ""
+        current_error = 0.0
+        target_v = 0.0
+        target_w = 0.0
         
-        # In Log để debug
-        self.get_logger().info(
-            f"L_raw: {self.raw_left:.4f} | R_raw: {self.raw_right:.4f} | STATE: {self.sensor_left}-{self.sensor_right}"
-        )
-
-        # Logic điều khiển
+        # 1. TRÁNH VẬT CẢN
         if self.sonar_dist < self.safe_dist:
+            self.current_v = 0.0
+            self.current_w = 0.0
             msg.linear.x = 0.0
-            debug_msg = "OBSTACLE"
-        else:
-            if self.sensor_left == 1 and self.sensor_right == 1:
-                msg.linear.x = self.base_speed
-                msg.angular.z = 0.0
-                debug_msg = "FORWARD"
-            elif self.sensor_left == 0 and self.sensor_right == 1:
-                msg.linear.x = self.base_speed * 0.5
-                msg.angular.z = -self.turn_speed 
-                debug_msg = "TURN RIGHT"
-            elif self.sensor_left == 1 and self.sensor_right == 0:
-                msg.linear.x = self.base_speed * 0.5
-                msg.angular.z = self.turn_speed
-                debug_msg = "TURN LEFT"
+            msg.angular.z = 0.0
+            self.pub_cmd.publish(msg)
+            self.pub_debug.publish(String(data=f"OBSTACLE STOP|Err:0|Spd:0.0|L:{self.sensor_left}|R:{self.sensor_right}"))
+            return
+
+        # 2. TÍNH TOÁN SAI SỐ VÀ CẬP NHẬT TRÍ NHỚ
+        if self.sensor_left == 1 and self.sensor_right == 0:
+            current_error = 1.0   
+            self.last_turn_dir = 1.0 
+            debug_msg = "CORRECT LEFT"
+            
+        elif self.sensor_left == 0 and self.sensor_right == 1:
+            current_error = -1.0  
+            self.last_turn_dir = -1.0 
+            debug_msg = "CORRECT RIGHT"
+            
+        elif self.sensor_left == 0 and self.sensor_right == 0:
+            if self.last_turn_dir > 0:
+                current_error = 1.5
+                debug_msg = "SEARCHING LEFT (90 DEG)"
+            elif self.last_turn_dir < 0:
+                current_error = -1.5
+                debug_msg = "SEARCHING RIGHT (90 DEG)"
             else:
-                # Mất line -> Lùi nhẹ
-                msg.linear.x = -0.05
-                msg.angular.z = 0.0
-                debug_msg = "LOST"
+                current_error = 0.0
+                debug_msg = "FORWARD"
+                
+        else:
+            current_error = 0.0
+            self.last_turn_dir = 0.0  
+            debug_msg = "CENTERED"
+
+        # 3. THUẬT TOÁN PD
+        P_term = self.Kp * current_error
+        D_term = self.Kd * (current_error - self.last_error)
+        target_w = P_term + D_term
+        
+        self.last_error = current_error 
+        
+        # 4. CHIẾN LƯỢC VẬN TỐC
+        if abs(current_error) >= 1.5:
+            target_v = self.base_speed * 0.05
+        elif abs(current_error) > 0:
+            target_v = self.base_speed * 0.4
+        else:
+            target_v = self.base_speed
+
+        # 5. BỘ LỌC LÀM MƯỢT (EMA)
+        self.current_v = (1.0 - self.alpha_v) * self.current_v + self.alpha_v * target_v
+        self.current_w = (1.0 - self.alpha_w) * self.current_w + self.alpha_w * target_w
+
+        msg.linear.x = self.current_v
+        msg.angular.z = self.current_w
 
         self.pub_cmd.publish(msg)
-        self.pub_debug.publish(String(data=f"{debug_msg}|Err:0|Spd:{msg.linear.x:.2f}|L:{self.sensor_left}|R:{self.sensor_right}"))
+        self.pub_debug.publish(String(data=f"{debug_msg}|Err:{current_error:.2f}|Spd:{self.current_v:.2f}|L:{self.sensor_left}|R:{self.sensor_right}"))
 
 def main(args=None):
     rclpy.init(args=args)
@@ -104,3 +131,6 @@ def main(args=None):
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

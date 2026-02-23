@@ -45,7 +45,7 @@ def generate_launch_description():
         arguments=[
             '-topic', 'robot_description',
             '-name', 'my_bot',
-            '-x', '0.0', '-y', '-2.0', '-z', '0.2', '-Y', '0.0'
+            '-x', '-12.0', '-y', '-8.0', '-z', '0.2', '-Y', '0.0' # Đã cập nhật x và y
         ],
         output='screen'
     )
@@ -61,16 +61,21 @@ def generate_launch_description():
             '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
             '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
             
-            # SENSORS (Tên topic ngắn gọn từ URDF)
+            # SENSORS
             '/sensors/line_left_raw@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
             '/sensors/line_right_raw@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
-            '/sensors/sonar_front_raw@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
+            
+            # BỎ DÒNG CŨ ĐI VÀ THAY BẰNG 2 DÒNG MỚI NÀY
+            '/sensors/sonar_left_raw@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
+            '/sensors/sonar_right_raw@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
         ],
         parameters=[{
-            # Ép ROS Publisher phải là Best Effort để khớp với Gazebo
             'qos_overrides./sensors/line_left_raw.publisher.reliability': 'best_effort',
             'qos_overrides./sensors/line_right_raw.publisher.reliability': 'best_effort',
-            'qos_overrides./sensors/sonar_front_raw.publisher.reliability': 'best_effort',
+            
+            # BỎ DÒNG CŨ ĐI VÀ THAY BẰNG 2 DÒNG MỚI NÀY
+            'qos_overrides./sensors/sonar_left_raw.publisher.reliability': 'best_effort',
+            'qos_overrides./sensors/sonar_right_raw.publisher.reliability': 'best_effort',
         }],
         output='screen'
     )

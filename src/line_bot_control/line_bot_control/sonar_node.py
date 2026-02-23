@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
 from sensor_msgs.msg import LaserScan
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 class SonarNode(Node):
     def __init__(self):
@@ -12,8 +12,14 @@ class SonarNode(Node):
         self.window_size = self.get_parameter('sonar_filter_window').value
         self.history = []
         
-        self.create_subscription(LaserScan, '/sensors/sonar_left_raw', self.left_cb, 10)
-        self.create_subscription(LaserScan, '/sensors/sonar_right_raw', self.right_cb, 10)
+        qos_profile = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT
+        )
+        
+        # Áp dụng QoS vào Subscription
+        self.create_subscription(LaserScan, '/sensors/sonar_left_raw', self.left_cb, qos_profile)
+        self.create_subscription(LaserScan, '/sensors/sonar_right_raw', self.right_cb, qos_profile)
         
         self.dist_left = 99.0
         self.dist_right = 99.0
@@ -32,7 +38,6 @@ class SonarNode(Node):
     def process(self):
         current_min = min(self.dist_left, self.dist_right)
         
-        # Moving Average Filter
         self.history.append(current_min)
         if len(self.history) > self.window_size:
             self.history.pop(0)
