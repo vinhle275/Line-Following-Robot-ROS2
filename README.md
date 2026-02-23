@@ -34,14 +34,14 @@ src/
     ├── resource
     ├── setup.py               
     └── package.xml
-
+```
 
 ## Cách chạy dựa án
-
 ### Build toàn bộ workspace
 ```bash
 colcon build
 ```
+
 ### Terminal 1
 ```bash
 source install/setup.bash
